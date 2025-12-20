@@ -577,9 +577,9 @@
                         </div>
 
                         <div style="margin-top:2rem; display:flex; gap:1rem;">
-                            <button type="submit" class="btn btn-primary">To'lash va Saqlash</button>
-                            <button type="button" class="btn btn-secondary"
-                                onclick="this.form.reset()">Tozalash</button>
+                            <button type="submit" id="submit-btn" class="btn btn-primary">To'lash va Saqlash</button>
+                            <button type="button" class="btn btn-secondary" onclick="cancelEdit()">Tozalash / Bekor
+                                qilish</button>
                         </div>
                     </form>
                 </div>
@@ -623,6 +623,8 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 5. EDIT MODE INDICATOR (Optional, or just handle in form) -->
 
             <!-- 4. COUNTERPARTIES -->
             <div id="view-counterparties" class="view-section" style="display:none;">
@@ -674,6 +676,7 @@
         let balance = parseFloat(localStorage.getItem('bank_balance') || '1000000000'); // Start with 1mlrd for demo
         let transactions = JSON.parse(localStorage.getItem('bank_transactions') || '[]');
         let counterparties = JSON.parse(localStorage.getItem('bank_counterparties') || '[]');
+        let editingTxId = null; // Track which transaction is being edited
 
         // --- INIT ---
         window.onload = function () {
@@ -729,9 +732,21 @@
             e.preventDefault();
 
             const amount = parseFloat(document.getElementById('p-amount').value);
-            if (amount > balance) {
-                alert("Mablag' yetarli emas!");
-                return;
+
+            // Validation
+            if (editingTxId) {
+                // If editing, we first need to check if we have enough balance assuming the old amount is refunded
+                const oldTx = transactions.find(t => t.id === editingTxId);
+                const tempBalance = balance + oldTx.amount;
+                if (amount > tempBalance) {
+                    alert("Mablag' yetarli emas! (Tahrirlashda)");
+                    return;
+                }
+            } else {
+                if (amount > balance) {
+                    alert("Mablag' yetarli emas!");
+                    return;
+                }
             }
 
             const docNum = document.getElementById('p-num').value;
@@ -743,35 +758,108 @@
             const purpose = document.getElementById('p-purpose').value;
             const typeCode = document.getElementById('p-type-code').value; // Dt Account
 
-            const tx = {
-                id: Date.now(),
-                docNum: docNum,
-                date: date,
-                type: 'Chiqim',
-                payee: payee,
-                payeeDetails: { acc: payeeAcc, mfo: payeeMfo, inn: payeeInn },
-                amount: amount,
-                purpose: purpose,
-                dt: typeCode,
-                kt: '5110'
-            };
+            if (editingTxId) {
+                // UPDATE EXISTING
+                const index = transactions.findIndex(t => t.id === editingTxId);
+                if (index !== -1) {
+                    const oldTx = transactions[index];
 
-            balance -= amount;
-            transactions.unshift(tx);
+                    // 1. Revert old balance
+                    balance += oldTx.amount;
+                    // 2. Apply new balance
+                    balance -= amount;
+
+                    // 3. Update tx
+                    transactions[index] = {
+                        ...oldTx,
+                        docNum, date, payee,
+                        payeeDetails: { acc: payeeAcc, mfo: payeeMfo, inn: payeeInn },
+                        amount, purpose, dt: typeCode
+                    };
+
+                    alert("O'zgarishlar saqlandi!");
+                }
+            } else {
+                // CREATE NEW
+                const tx = {
+                    id: Date.now(),
+                    docNum: docNum,
+                    date: date,
+                    type: 'Chiqim',
+                    payee: payee,
+                    payeeDetails: { acc: payeeAcc, mfo: payeeMfo, inn: payeeInn },
+                    amount: amount,
+                    purpose: purpose,
+                    dt: typeCode,
+                    kt: '5110'
+                };
+
+                balance -= amount;
+                transactions.unshift(tx);
+
+                // Auto increment next doc num only for new
+                document.getElementById('p-num').value = parseInt(docNum) + 1;
+            }
+
             saveTx();
 
-            // Auto increment next doc num
-            document.getElementById('p-num').value = parseInt(docNum) + 1;
-            this.reset();
-            document.getElementById('p-date').value = date; // restore date
+            // Clean up
+            cancelEdit(); // Resets form and ID
+            document.getElementById('p-date').value = date; // Keep date for convenience
 
-            // Ask to print
-            if (confirm("To'lov muvaffaqiyatli o'tkazildi! To'lov topshiriqnomasi blankasini chop etasizmi?")) {
-                printPaymentOrder(tx);
-            } else {
+            if (!editingTxId) {
+                // Only redirect if it was a new creation, or stay if edit? 
+                // Let's go to history to see changes
                 showView('history');
             }
         };
+
+        function editTransaction(id) {
+            const tx = transactions.find(t => t.id === id);
+            if (!tx) return;
+
+            editingTxId = id;
+
+            // Switch to form
+            showView('payment');
+
+            // Fill form
+            document.getElementById('p-num').value = tx.docNum || '';
+            document.getElementById('p-date').value = tx.date;
+
+            document.getElementById('p-payee-name').value = tx.payee;
+            if (tx.payeeDetails) {
+                document.getElementById('p-payee-account').value = tx.payeeDetails.acc || '';
+                document.getElementById('p-payee-mfo').value = tx.payeeDetails.mfo || '';
+                document.getElementById('p-payee-inn').value = tx.payeeDetails.inn || '';
+            }
+
+            document.getElementById('p-type-code').value = tx.dt || '6010';
+            document.getElementById('p-amount').value = tx.amount;
+            document.getElementById('p-purpose').value = tx.purpose;
+
+            // Change UI
+            document.querySelector('.section-title').innerText = "To'lov Topshiriqnomasi (Tahrirlash)";
+            document.getElementById('submit-btn').innerText = "💾 Saqlash";
+            document.getElementById('submit-btn').classList.remove('btn-primary');
+            document.getElementById('submit-btn').classList.add('btn-success');
+        }
+
+        function cancelEdit() {
+            editingTxId = null;
+            document.getElementById('payment-form').reset();
+
+            // Reset UI
+            document.querySelector('.section-title').innerText = "To'lov Topshiriqnomasi Yaratish (Chiqim)";
+            document.getElementById('submit-btn').innerText = "To'lash va Saqlash";
+            document.getElementById('submit-btn').classList.add('btn-primary');
+            document.getElementById('submit-btn').classList.remove('btn-success');
+
+            // Restore ID logic
+            const lastDoc = transactions.length > 0 ? Math.max(...transactions.map(t => parseInt(t.docNum || 0))) : 0;
+            document.getElementById('p-num').value = lastDoc + 1;
+            document.getElementById('p-date').valueAsDate = new Date();
+        }
 
         // --- COUNTERPARTIES LOGIC ---
         document.getElementById('cp-form').onsubmit = function (e) {
@@ -863,8 +951,9 @@
                         <td class="amount-col ${isOut ? 'text-red' : 'text-green'}">
                             ${isOut ? '-' : '+'}${t.amount.toLocaleString()}
                         </td>
-                        <td>
-                            <button onclick="printPaymentOrderById(${t.id})" class="btn btn-secondary" style="padding:5px 10px; font-size:0.8rem;">🖨️</button>
+                        <td style="display:flex; gap:5px;">
+                            <button onclick="printPaymentOrderById(${t.id})" class="btn btn-secondary" style="padding:5px 10px; font-size:0.8rem;" title="Chop etish">🖨️</button>
+                            <button onclick="editTransaction(${t.id})" class="btn btn-primary" style="padding:5px 10px; font-size:0.8rem; background-color:#f59e0b; border:none;" title="Tahrirlash">✏️</button>
                         </td>
                     </tr>
                 `;
